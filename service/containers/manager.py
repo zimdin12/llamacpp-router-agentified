@@ -151,53 +151,70 @@ class ContainerManager:
             container_name = f"{self.project_name}-{name}"
 
             try:
-                # Remove existing stopped container with same name
+                # Try to reuse existing stopped container (faster than recreate)
+                container = None
                 try:
                     old = self.docker.containers.get(container_name)
-                    old.remove(force=True)
+                    if old.status in ("exited", "created"):
+                        logger.info(f"Restarting existing container: {container_name}")
+                        old.start()
+                        container = old
+                    elif old.status == "running":
+                        container = old
+                    else:
+                        old.remove(force=True)
                 except docker.errors.NotFound:
                     pass
 
-                # Ensure volumes exist
-                volumes = {}
-                for vol_name, mount_path in defn.volumes.items():
-                    try:
-                        self.docker.volumes.get(vol_name)
-                    except docker.errors.NotFound:
-                        self.docker.volumes.create(vol_name)
-                    volumes[vol_name] = {"bind": mount_path, "mode": "rw"}
+                if container is None:
+                    # Create new container
+                    # Ensure volumes exist
+                    volumes = {}
+                    for vol_name, mount_path in defn.volumes.items():
+                        try:
+                            self.docker.volumes.get(vol_name)
+                        except docker.errors.NotFound:
+                            self.docker.volumes.create(vol_name)
+                        volumes[vol_name] = {"bind": mount_path, "mode": "rw"}
 
-                # GPU device requests
-                device_requests = []
-                if defn.gpu.device_ids:
-                    device_requests.append(
-                        docker.types.DeviceRequest(
-                            device_ids=defn.gpu.device_ids,
-                            capabilities=[["gpu"]],
+                    # GPU device requests — pass all GPUs if available
+                    device_requests = []
+                    if defn.gpu.device_ids:
+                        device_requests.append(
+                            docker.types.DeviceRequest(
+                                device_ids=defn.gpu.device_ids,
+                                capabilities=[["gpu"]],
+                            )
                         )
+                    elif defn.group == "inference":
+                        # Auto-detect: give inference containers GPU access
+                        device_requests.append(
+                            docker.types.DeviceRequest(
+                                count=-1, capabilities=[["gpu"]],
+                            )
+                        )
+
+                    labels = {
+                        "agentify.managed": "true",
+                        "agentify.name": name,
+                        "agentify.group": defn.group,
+                        **defn.labels,
+                    }
+
+                    container = self.docker.containers.run(
+                        image=defn.image,
+                        name=container_name,
+                        command=defn.command if defn.command else None,
+                        detach=True,
+                        network=self.network_name,
+                        volumes=volumes,
+                        environment=dict(defn.environment),
+                        labels=labels,
+                        device_requests=device_requests if device_requests else None,
+                        mem_limit=defn.resources.memory_limit,
+                        nano_cpus=int(float(defn.resources.cpu_limit) * 1e9),
+                        restart_policy={"Name": "no"},
                     )
-
-                labels = {
-                    "agentify.managed": "true",
-                    "agentify.name": name,
-                    "agentify.group": defn.group,
-                    **defn.labels,
-                }
-
-                container = self.docker.containers.run(
-                    image=defn.image,
-                    name=container_name,
-                    command=defn.command if defn.command else None,
-                    detach=True,
-                    network=self.network_name,
-                    volumes=volumes,
-                    environment=dict(defn.environment),
-                    labels=labels,
-                    device_requests=device_requests if device_requests else None,
-                    mem_limit=defn.resources.memory_limit,
-                    nano_cpus=int(float(defn.resources.cpu_limit) * 1e9),
-                    restart_policy={"Name": "no"},
-                )
 
                 state.container_id = container.id
                 state.container_hostname = container_name
@@ -263,7 +280,7 @@ class ContainerManager:
                 try:
                     container = self.docker.containers.get(state.container_id)
                     container.stop(timeout=timeout)
-                    container.remove(force=True)
+                    # Keep stopped container for fast restart (don't remove)
                 except docker.errors.NotFound:
                     pass
                 except Exception as e:
