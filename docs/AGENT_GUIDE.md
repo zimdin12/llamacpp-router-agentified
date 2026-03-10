@@ -1,225 +1,59 @@
-# Agent Guide: Building Services on Agentify Container
+# Agent Guide: llamacpp-router-agentified
 
-This guide is for AI agents tasked with building a service on this template.
+This guide explains how to use and extend the llamacpp-router-agentified service.
 
 ## Overview
 
-This template provides a FastAPI orchestrator that manages Docker sub-containers on demand. Your job is to:
-1. Define what containers to run (models, databases, etc.)
-2. Add API endpoints that use those containers
-3. Register MCP tools so other AI agents can use the service
-4. Update integrations (Claude Code, OpenClaw, Open WebUI)
+This service is an Ollama-compatible router that manages multiple llamacpp-agentified sub-containers. Each sub-container runs a single LLM model. The router handles:
 
-## File Map: What to Modify
-
-| File | What Goes Here | Priority |
-|------|---------------|----------|
-| `config/service.example.json` | Container definitions (images, commands, GPU, volumes) | First |
-| `service/routers/api.py` | Domain-specific REST endpoints | Core |
-| `mcp/sse_server.py` | MCP tools (SSE transport, runs in container) | Core |
-| `mcp/stdio/server.js` | MCP tools (stdio transport, mirrors SSE) | Core |
-| `service/requirements.txt` | Python dependencies | As needed |
-| `Dockerfile` | System packages (apt-get) | As needed |
-| `.env.example` | Service-specific env vars | As needed |
-| `integrations/claude-code/SKILL.md` | Skill definition with all tools | Important |
-| `integrations/openclaw/index.ts` | Plugin tools + hooks | Important |
-| `integrations/open-webui/tool.py` | Tool methods for chat UI | Important |
-| `integrations/open-webui/prompt.md` | System prompt for chat models | Nice to have |
-
-## Step-by-Step
-
-### Step 1: Define Containers
-
-Edit `config/service.example.json`. Each container needs at minimum:
-- `image` - Docker image
-- `internal_port` - Port the process listens on
-- `command` - How to start it (if not using image default)
-
-Optional but recommended:
-- `gpu` - Device IDs and memory fraction
-- `volumes` - Named volumes for persistence
-- `idle_timeout_seconds` - When to auto-stop (0 = never)
-- `auto_start` - Start on orchestrator startup
-- `group` - Logical grouping name
-- `health_check.endpoint` - Path to poll for readiness
-
-Example for a llama.cpp container:
-```json
-"qwen": {
-  "image": "ghcr.io/ggerganov/llama.cpp:server-cuda",
-  "command": ["--model", "/models/qwen3.5.gguf", "--port", "8080", "--gpu-layers", "99"],
-  "volumes": { "llm-models": "/models" },
-  "gpu": { "device_ids": ["0"], "memory_fraction": 0.6 },
-  "idle_timeout_seconds": 300,
-  "group": "inference"
-}
-```
-
-To share a container (avoid duplicates):
-```json
-"openmemory-llm": {
-  "image": "ghcr.io/ggerganov/llama.cpp:server-cuda",
-  "shared_with": "qwen"
-}
-```
-
-### Step 2: Add API Endpoints
-
-Edit `service/routers/api.py`. Access containers via the manager:
-
-```python
-from fastapi import APIRouter, Request, HTTPException
-import httpx
-
-router = APIRouter(tags=["api"])
-
-@router.post("/chat/completions")
-async def chat_completions(request: Request):
-    """OpenAI-compatible chat completions using the qwen container."""
-    manager = request.app.state.container_manager
-    state = manager.states.get("qwen")
-
-    if not state or state.status.value != "running":
-        # Start it
-        await manager.start_container("qwen")
-        state = manager.states["qwen"]
-
-    url = f"{state.internal_url}/v1/chat/completions"
-    body = await request.json()
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(url, json=body)
-        return resp.json()
-```
-
-Or use the built-in proxy: clients can directly call `/route/qwen/v1/chat/completions`.
-
-### Step 3: Register MCP Tools
-
-Edit `mcp/sse_server.py`. Container management tools are already built-in. Add domain-specific tools:
-
-```python
-@mcp_server.tool()
-async def chat(message: str, model: str = "qwen") -> str:
-    """Send a chat message to a specific LLM container."""
-    manager = _get_manager()
-    if not manager:
-        return "Container manager not available"
-
-    # Ensure container is running
-    await manager.start_container(model)
-    url = manager.resolve_url(model)
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(f"{url}/v1/chat/completions", json={
-            "messages": [{"role": "user", "content": message}]
-        })
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
-```
-
-Mirror in `mcp/stdio/server.js`:
-```javascript
-server.tool(
-  "chat",
-  "Send a chat message to an LLM container",
-  {
-    message: z.string().describe("The message to send"),
-    model: z.string().optional().default("qwen").describe("Container name"),
-  },
-  async ({ message, model }) => {
-    try {
-      const result = await apiCall("POST", "/api/v1/chat/completions", {
-        model, messages: [{ role: "user", content: message }]
-      });
-      return ok(result);
-    } catch (e) { return err(e); }
-  }
-);
-```
-
-### Step 4: Update Integrations
-
-**Claude Code** (`integrations/claude-code/SKILL.md`):
-- Add your new tools to the `tools:` list in the frontmatter
-- Document each tool with usage examples
-- Update triggers for when the skill should activate
-
-**OpenClaw** (`integrations/openclaw/index.ts`):
-- Add tool handlers that call your REST endpoints
-- Implement `before_agent_start` hook for auto-context injection
-- Implement `agent_end` hook for auto-processing
-
-**Open WebUI** (`integrations/open-webui/tool.py`):
-- Add async methods - each becomes a tool in the chat UI
-- Use `httpx` (not `aiohttp`) - it's available in Open WebUI's environment
-
-### Step 5: Add Dependencies
-
-- Python packages: `service/requirements.txt`
-- System packages: add to `Dockerfile` in the `apt-get install` line
-- Node packages: `mcp/stdio/package.json`
-
-### Step 6: Persistence
-
-- Use `/data` directory for the orchestrator's own persistent data
-- Sub-containers use named volumes (defined in their config)
-- Access path via `from service.config import get_config; get_config().data_dir`
-
-### Step 7: Test
-
-```bash
-docker compose up -d --build
-bash scripts/test-endpoints.sh
-
-# Test a specific container:
-curl -X POST http://localhost:8800/api/v1/containers/qwen/start
-curl http://localhost:8800/route/qwen/health
-curl http://localhost:8800/api/v1/gpu
-```
+1. **Model registry** — parses `MODELS` env var, loads model catalog configs
+2. **Container lifecycle** — spawns/stops Docker containers for each model
+3. **Request routing** — proxies API requests to the correct model container
+4. **API translation** — Ollama-format requests are translated to OpenAI format
 
 ## Architecture
 
 ```
-Clients (Claude Code, OpenClaw, Open WebUI, curl)
-         |
-         v
-+------------------------------+
-|  FastAPI Orchestrator (:8800) |
-|  /health /info /docs         |
-|  /api/v1/* (your endpoints)  |
-|  /route/{name}/* (proxy)     |
-|  /mcp/sse (MCP server)       |
-|                              |
-|  ContainerManager            |
-|   - DockerClient (SDK)       |
-|   - GPUAllocator             |
-|   - IdleReaper (background)  |
-|   - HealthMonitor (bg)       |
-+------|----------|------------+
-       |          |
-  docker.sock     |
-       |          |
-  +----v---+ +----v----+ +-------+
-  | embed  | | qwen    | | glm4  |
-  | GPU:0  | | GPU:0   | | GPU:1 |
-  | 0.2    | | 0.6     | | 0.5   |
-  +--------+ +---------+ +-------+
-   (always)   (on-demand)  (on-demand)
+Client
+  │
+  ├── /v1/chat/completions ──► openai_proxy.py ──► llm-{model}:8080/v1/chat/completions
+  ├── /api/chat ──► ollama_compat.py ──► translates to OpenAI ──► llm-{model}:8080/v1/chat/completions
+  └── /api/tags ──► ollama_compat.py ──► ModelRegistry.list_models()
 ```
 
-## Checklist
+## Adding Models
 
-- [ ] Container definitions in service.example.json
-- [ ] API endpoints in service/routers/api.py
-- [ ] MCP tools in mcp/sse_server.py (SSE)
-- [ ] MCP tools in mcp/stdio/server.js (stdio)
-- [ ] Claude Code SKILL.md updated
-- [ ] OpenClaw plugin updated
-- [ ] Open WebUI tool updated
-- [ ] Python deps in requirements.txt
-- [ ] System deps in Dockerfile (if any)
-- [ ] .env.example updated (if new vars)
-- [ ] `docker compose up --build` works
-- [ ] All endpoints respond correctly
-- [ ] Sub-containers start and respond via /route/
+1. Create a config in `config/models/<name>.json`
+2. Add the name to `MODELS` env var
+3. Restart the router
+
+The model catalog format is shared with llamacpp-agentified — see its README for the JSON schema.
+
+## Key Files
+
+| File | Purpose |
+|---|---|
+| `service/main.py` | Startup: ModelRegistry → ContainerManager → MCP |
+| `service/model_registry.py` | MODELS env → container definitions |
+| `service/routers/openai_proxy.py` | /v1/* proxy to sub-containers |
+| `service/routers/ollama_compat.py` | /api/* Ollama translation layer |
+| `service/containers/manager.py` | Docker SDK container lifecycle |
+| `config/models/*.json` | Model catalog |
+
+## Extending
+
+### Adding a new API format
+
+Create a new router in `service/routers/` that:
+1. Accepts requests in the target format
+2. Resolves model → container URL via `ModelRegistry.get_model_url()`
+3. Translates to OpenAI format
+4. Proxies to the sub-container
+
+### Adding static containers
+
+Define them in `config/service.json` under `containers.definitions`. They merge with the dynamically-generated model containers.
+
+### GPU management
+
+Set `GPU_FRACTION_PER_MODEL` to split GPU across models. The ContainerManager tracks allocations and prevents overcommitment.

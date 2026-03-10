@@ -1,165 +1,221 @@
-# Agentify Container
+# llamacpp-router-agentified
 
-A boilerplate for building AI agent-friendly Docker services with on-demand sub-container orchestration.
+Ollama-like LLM router that manages multiple [llamacpp-agentified](https://github.com/zimdin12/llamacpp-agentified) sub-containers. Each model runs in its own isolated container, and the router provides a unified API with both OpenAI and Ollama compatibility.
 
-Services built on this template are automatically accessible to AI agents via REST API and MCP protocol, with integrations for Claude Code, OpenClaw, and Open WebUI. The built-in container manager can spin up and route requests to sub-containers (like llama.cpp instances) on demand, with GPU-aware scheduling and automatic idle shutdown.
+Built on [agentify-container](https://github.com/zimdin12/agentify-container) — uses the Python Docker SDK to spawn, health-check, and auto-shutdown model containers.
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/zimdin12/agentify-container.git
-cd agentify-container
-bash setup.sh          # Copies config templates
+# 1. Build llamacpp-agentified image first (the router spawns these)
+cd ../llamacpp-agentified
+docker compose build
+docker tag llamacpp-inference llamacpp-agentified:latest
 
-# Edit .env (ports, project name, resources)
-# Edit config/service.json (container definitions) - see config/examples/
+# 2. Set up the router
+cd ../llamacpp-router-agentified
+cp .env.example .env
+cp config/service.example.json config/service.json
+
+# Edit .env — set MODELS to the models you want (comma-separated)
+# MODELS=qwen3-4b,qwen3-embedding-0.6b
 
 docker compose up -d --build
-bash scripts/test-endpoints.sh
 ```
 
-## What You Get
+## How It Works
 
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| FastAPI orchestrator | `service/` | REST API + container management + streaming proxy |
-| Container manager | `service/containers/` | Docker SDK-based lifecycle management with GPU tracking |
-| MCP SSE server | `mcp/sse_server.py` | In-container MCP with container mgmt tools |
-| MCP stdio server | `mcp/stdio/` | Host-side MCP for Claude Code CLI |
-| Claude Code skill | `integrations/claude-code/` | Skill with all tools documented |
-| OpenClaw plugin | `integrations/openclaw/` | Plugin with tools and hooks |
-| Open WebUI tool | `integrations/open-webui/` | Tool for chat interfaces |
-| Config examples | `config/examples/` | Ready-to-use configs for common setups |
-
-## Container Management
-
-Define sub-containers in `config/service.json`. They start on demand and auto-stop after idle.
-
-### Simple example (one LLM):
-
-```json
-{
-  "containers": {
-    "defaults": {
-      "image": "ghcr.io/ggerganov/llama.cpp:server-cuda",
-      "internal_port": 8080,
-      "volumes": { "llm-models": "/models" },
-      "gpu": { "device_ids": ["0"] },
-      "idle_timeout_seconds": 300
-    },
-    "definitions": {
-      "llm": {
-        "command": ["--model", "/models/my-model.gguf", "--port", "8080", "--gpu-layers", "99"]
-      }
-    }
-  }
-}
+```
+Client Request
+    │
+    ▼
+llamacpp-router (:11434)
+    ├── /v1/chat/completions  ──► routes by "model" field
+    ├── /api/chat             ──► Ollama-compatible
+    └── /api/tags             ──► lists all models
+         │
+         ▼
+    ModelRegistry (parses MODELS env var)
+         │
+    ┌────┴────────────────┐
+    ▼                     ▼
+llm-qwen3-4b (:8080)   llm-qwen3-embedding-0.6b (:8080)
+(llamacpp-agentified)   (llamacpp-agentified)
 ```
 
-### Multi-LLM router (3 models, GPU scheduling):
+1. On startup, the router reads `MODELS` env var (e.g., `qwen3-4b,mistral-7b`)
+2. For each model, it generates a container definition and registers it with the ContainerManager
+3. ContainerManager spawns llamacpp-agentified containers via Docker SDK
+4. Requests are routed to the correct container based on the `model` field
 
-See `config/examples/llama-cpp-router.json`
+## API Endpoints
 
-### Full stack with shared containers:
+### OpenAI-Compatible (proxied to sub-containers)
 
-See `config/examples/openclaw-full-stack.json` - demonstrates how openmemory reuses openclaw's LLM containers instead of running its own.
+| Endpoint | Method | Description |
+|---|---|---|
+| `/v1/chat/completions` | POST | Chat completion (routes by `model` field) |
+| `/v1/completions` | POST | Text completion |
+| `/v1/embeddings` | POST | Text embeddings |
+| `/v1/models` | GET | List all available models |
 
-### Key features:
+### Ollama-Compatible
 
-- **On-demand**: First request to `/route/{name}/...` starts the container
-- **Auto-stop**: Containers shut down after configurable idle timeout
-- **GPU scheduling**: Memory fraction tracking prevents over-subscription
-- **Shared containers**: `"shared_with": "other-name"` reuses another container
-- **Streaming proxy**: Full SSE/chunked support for LLM inference
-- **Health monitoring**: Auto-restart on health check failure
-- **Groups**: Logical grouping for organizational clarity
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/chat` | POST | Ollama chat format (translated to OpenAI internally) |
+| `/api/generate` | POST | Ollama generate format |
+| `/api/embeddings` | POST | Ollama embedding format |
+| `/api/tags` | GET | List models (Ollama format) |
+| `/api/show` | POST | Model details (Ollama format) |
 
-### Accessing sub-containers:
+### Service
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/health` | GET | Health check |
+| `/ready` | GET | Readiness with model list |
+| `/info` | GET | Full service discovery (models, endpoints, containers) |
+| `/docs` | GET | Swagger UI |
+| `/api/v1/containers` | GET | Container management API (from agentify-container) |
+
+## Usage Examples
+
+### OpenAI SDK
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:11434/v1", api_key="unused")
+
+response = client.chat.completions.create(
+    model="qwen3-4b",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(response.choices[0].message.content)
+```
+
+### Ollama SDK
+
+```python
+import ollama
+
+client = ollama.Client(host="http://localhost:11434")
+
+response = client.chat(
+    model="qwen3-4b",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(response["message"]["content"])
+```
+
+### curl
 
 ```bash
-# Via proxy (auto-starts if needed):
-curl http://localhost:8800/route/qwen/v1/chat/completions -d '{"messages":[...]}'
+# OpenAI format
+curl http://localhost:11434/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen3-4b","messages":[{"role":"user","content":"Hello"}]}'
 
-# Management API:
-curl http://localhost:8800/api/v1/containers           # List all
-curl -X POST http://localhost:8800/api/v1/containers/qwen/start
-curl -X POST http://localhost:8800/api/v1/containers/qwen/stop
-curl http://localhost:8800/api/v1/gpu                   # GPU status
+# Ollama format
+curl http://localhost:11434/api/chat \
+  -d '{"model":"qwen3-4b","messages":[{"role":"user","content":"Hello"}],"stream":false}'
+
+# List models
+curl http://localhost:11434/v1/models
+curl http://localhost:11434/api/tags
 ```
-
-## For AI Agents
-
-See [CLAUDE.md](CLAUDE.md) for build instructions. See [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) for step-by-step implementation guide.
 
 ## Configuration
 
-```
-.env                    -> Deployment: ports, project name, resources, credentials
-config/service.json     -> Service: container definitions, custom settings
+### Environment Variables
+
+| Env Var | Default | Description |
+|---|---|---|
+| `MODELS` | *(empty)* | Comma-separated model names to serve |
+| `SERVICE_PORT` | `11434` | Router API port (Ollama default) |
+| `LLAMACPP_IMAGE` | `llamacpp-agentified:latest` | Docker image for model containers |
+| `LLAMACPP_DATA_VOLUME` | `llamacpp-shared-models` | Shared volume for model files |
+| `GPU_FRACTION_PER_MODEL` | `0.0` | GPU memory fraction per model |
+| `HF_TOKEN` | *(empty)* | HuggingFace token (passed to sub-containers) |
+| `MCP_ENABLED` | `true` | Enable MCP SSE server |
+| `LOG_LEVEL` | `info` | Logging level |
+
+### Model Catalog
+
+Models are defined in `config/models/*.json`. The catalog is shared with llamacpp-agentified — same format:
+
+```json
+{
+  "repo": "unsloth/Qwen3-4B-GGUF",
+  "filename": "Qwen3-4B-Q4_K_M.gguf",
+  "context_length": 32768,
+  "gpu_layers": -1,
+  "chat_format": "chatml",
+  "description": "Qwen3 4B Q4_K_M",
+  "type": "chat",
+  "embedding_dims": null
+}
 ```
 
-Environment variables always override service.json. All ports and resource limits are overrideable.
+Add new models by dropping a JSON file in `config/models/` and adding the name to `MODELS`.
+
+### Static Containers
+
+Beyond dynamically-generated model containers, you can define static containers in `config/service.json` (e.g., a shared embedding service, a reranker, etc.). These merge with the model containers.
+
+## Architecture
+
+```
+llamacpp-router-agentified/
+├── config/
+│   ├── models/                  # Shared model catalog
+│   │   ├── qwen3-4b.json
+│   │   └── ...
+│   └── service.example.json     # Container manager defaults
+├── service/
+│   ├── main.py                  # FastAPI app with model registry + container manager
+│   ├── model_registry.py        # MODELS env → container definitions
+│   ├── config.py                # Environment-based configuration
+│   ├── containers/              # Docker SDK container management (from agentify-container)
+│   │   ├── manager.py
+│   │   ├── models.py
+│   │   ├── proxy.py
+│   │   └── gpu.py
+│   └── routers/
+│       ├── health.py            # /health, /ready, /info
+│       ├── openai_proxy.py      # /v1/* → sub-container proxy
+│       ├── ollama_compat.py     # /api/* Ollama-compatible endpoints
+│       └── containers.py        # Container management API
+├── mcp/
+│   └── sse_server.py            # MCP SSE server with container tools
+├── Dockerfile
+├── docker-compose.yml
+└── .env.example
+```
+
+## Multi-Model GPU Sharing
+
+When running multiple models on a single GPU, set `GPU_FRACTION_PER_MODEL`:
+
+```bash
+# 3 models sharing one GPU
+MODELS=qwen3-4b,qwen3-1.7b,qwen3-embedding-0.6b
+GPU_FRACTION_PER_MODEL=0.33
+```
+
+The container manager tracks GPU allocations and prevents overcommitment.
 
 ## MCP Integration
 
-```bash
-# SSE (recommended, no host install):
-claude mcp add my-service --transport sse http://localhost:8800/mcp/sse
+The router exposes MCP tools for AI agents (Claude Code, etc.):
 
-# stdio (alternative):
-cd mcp/stdio && npm install
-claude mcp add my-service -- node /path/to/mcp/stdio/server.js
+```bash
+claude mcp add llamacpp-router --transport sse http://localhost:11434/mcp/claude-code/sse
 ```
 
-## Security Note
+## Related Projects
 
-The orchestrator container mounts `/var/run/docker.sock` to manage sub-containers. This grants Docker API access. For production, consider using a [Docker socket proxy](https://github.com/Tecnativa/docker-socket-proxy) to restrict API calls.
-
-## Roadmap
-
-Planned improvements and features for future development. Contributions welcome.
-
-### Security
-
-- **API key middleware** - The `API_KEY` config field exists but is not enforced yet. Add a FastAPI dependency that checks `Authorization: Bearer <key>` header when `config.api_key` is non-empty. This is the minimum viable auth for production use.
-- **Rate limiting** - Add `slowapi` or similar to protect against runaway agent loops. AI agents can make many rapid requests; without rate limiting a misconfigured agent could overwhelm the service or burn through GPU time.
-- **Docker socket proxy** - Instead of mounting the raw Docker socket, integrate [Tecnativa/docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) as a default sub-service. Restrict API access to only containers, networks, and volumes endpoints (block exec, images push, system).
-- **Secret management** - Container definitions can include environment variables with credentials (e.g., `NEO4J_AUTH`). Add a pattern for marking sensitive env vars so they are redacted from `/info` and `list_containers` responses. Consider Docker secrets or a `.secrets.env` file that is never exposed via API.
-
-### Observability
-
-- **Container event stream** - Add an SSE endpoint (e.g., `/api/v1/events`) that streams container lifecycle events (started, stopped, failed, health_changed) in real-time. Useful for dashboards and for AI agents that need to react to state changes without polling.
-- **Metrics endpoint** - Add a `/metrics` endpoint (Prometheus format) with counters for: requests proxied per container, container start/stop counts, GPU utilization fractions, proxy latency histograms, health check results.
-- **Structured logging improvements** - Current JSON logging is basic. Consider adding request ID tracing, container name context, and log correlation across proxy requests to sub-containers.
-
-### Container Management
-
-- **Container profiles/presets** - Define named profiles (e.g., "low-memory", "high-throughput") that bundle resource limits, GPU settings, and parallelism configs. An agent could say `start_container("qwen", profile="low-memory")` to override defaults.
-- **Warm standby mode** - Instead of fully stopping idle containers, pause them (Docker pause) to preserve loaded models in memory. Resume is near-instant vs. cold start. Useful for models that take 30+ seconds to load.
-- **Container dependencies** - Allow containers to declare dependencies (e.g., openmemory depends on qdrant and embed-llm). The manager would start dependencies first and stop dependents before stopping a dependency.
-- **Image pre-pull on setup** - Add a `make pull` target and `/api/v1/containers/pull-all` endpoint that pre-pulls all configured images. First-start latency is currently dominated by image pull time.
-- **Container resource monitoring** - Query Docker stats API to report actual CPU/memory/GPU usage per container, not just configured limits. Show in `list_containers` response.
-
-### Developer Experience
-
-- **GitHub Actions CI** - Add `.github/workflows/test.yml` that builds the image, starts the service, and runs `test-endpoints.sh`. Include a matrix for Python 3.12/3.13. This validates the template works on every push.
-- **Response body validation in tests** - `test-endpoints.sh` currently only checks HTTP status codes. Add `jq` assertions to verify `/health` returns `{"status":"healthy"}`, `/info` has the expected structure, and container management endpoints return valid schemas.
-- **Template instantiation script** - Add a `scripts/init-service.sh <name>` that renames the project: updates `.env.example`, `service.example.json`, `package.json`, `SKILL.md`, and `openclaw.plugin.json` with the given service name. Saves the first 5 minutes of manual find-and-replace.
-- **VS Code devcontainer** - Add `.devcontainer/devcontainer.json` for one-click dev environment setup with Python, Node, Docker-in-Docker, and the MCP stdio server pre-configured.
-
-### Integration
-
-- **OpenClaw plugin API verification** - The TypeScript plugin (`integrations/openclaw/index.ts`) uses assumed interfaces (`PluginContext`, etc.). These should be verified against the actual OpenClaw plugin API as it stabilizes. The plugin may need adaptation.
-- **MCP Streamable HTTP transport** - The MCP ecosystem is moving toward Streamable HTTP as the recommended transport (replacing SSE). Add support alongside SSE for forward compatibility.
-- **A2A (Agent-to-Agent) protocol** - Add an A2A endpoint so this service can be discovered and used by agents following the Agent-to-Agent protocol specification.
-- **OpenAI-compatible API layer** - For services that wrap LLMs (like llama.cpp), add an optional OpenAI-compatible endpoint layer (`/v1/chat/completions`, `/v1/embeddings`) that routes to the appropriate container. This makes the service a drop-in replacement for OpenAI API in any tool.
-
-### Architecture
-
-- **Multi-node support** - Currently all containers run on the same Docker host. For scaling, add support for Docker Swarm or remote Docker hosts so containers can be distributed across machines with different GPU configurations.
-- **Config hot-reload** - Watch `config/service.json` for changes and apply them without restart. New containers would be added to the manager, removed ones would be stopped, and changed ones would be flagged for restart.
-- **Backup/restore** - Add endpoints to export and import the full service state: container definitions, named volume data, and configuration. Useful for migrating between hosts or disaster recovery.
-
-## License
-
-MIT
+- **[llamacpp-agentified](https://github.com/zimdin12/llamacpp-agentified)** — The model container this router manages
+- **[openmemory-agentified](https://github.com/zimdin12/openmemory-agentified)** — Hybrid memory system that uses this as LLM backend
+- **[agentify-container](https://github.com/zimdin12/agentify-container)** — The base template
