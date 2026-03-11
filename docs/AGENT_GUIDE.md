@@ -1,10 +1,10 @@
-# Agent Guide: llamacpp-router-agentified
+# Agent Guide: aify-llamacpp-router
 
-This guide explains how to use and extend the llamacpp-router-agentified service.
+This guide explains how to use and extend the aify-llamacpp-router service.
 
 ## Overview
 
-This service is an Ollama-compatible router that manages multiple llamacpp-agentified sub-containers. Each sub-container runs a single LLM model. The router handles:
+This service is an Ollama-compatible router that manages multiple aify-llamacpp sub-containers. Each sub-container runs a single LLM model. The router handles:
 
 1. **Model registry** — parses `MODELS` env var, loads model catalog configs
 2. **Container lifecycle** — spawns/stops Docker containers for each model
@@ -27,7 +27,7 @@ Client
 2. Add the name to `MODELS` env var
 3. Restart the router
 
-The model catalog format is shared with llamacpp-agentified — see its README for the JSON schema.
+The model catalog format is shared with aify-llamacpp — see its README for the JSON schema.
 
 ## Key Files
 

@@ -1,0 +1,11 @@
+{
+  "repo": "mistralai/Ministral-3-3B-Instruct-2512-GGUF",
+  "filename": "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf",
+  "context_length": 32768,
+  "gpu_layers": -1,
+  "chat_format": "mistral-instruct",
+  "description": "Ministral 3B Instruct Q4_K_M — fast lightweight chat, 2.5GB VRAM",
+  "type": "chat",
+  "embedding_dims": null,
+  "extra_args": ["-fa", "on", "--no-mmap", "--jinja"]
+}

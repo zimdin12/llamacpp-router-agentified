@@ -8,6 +8,7 @@ to OpenAI format and proxies to the correct llamacpp sub-container.
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -64,9 +65,44 @@ def _get_manager(request: Request):
     return getattr(request.app.state, "container_manager", None)
 
 
-def _resolve_url(request: Request, model_name: str) -> str:
+def _touch_last_request(request: Request, model_name: str):
+    """Update last_request_at so the idle reaper doesn't kill active containers."""
+    registry = getattr(request.app.state, "model_registry", None)
+    manager = _get_manager(request)
+    if not registry or not manager:
+        return
+    entry = registry.get_model(model_name)
+    if not entry:
+        return
+    state = manager.states.get(entry.container_name)
+    if state:
+        state.last_request_at = datetime.now(timezone.utc)
+
+
+async def _ensure_model_running(request: Request, model_name: str):
+    """Auto-start a model container if it's stopped (on-demand startup)."""
     registry = _get_registry(request)
     manager = _get_manager(request)
+    if not manager:
+        return
+
+    entry = registry.get_model(model_name)
+    if not entry:
+        return
+
+    from service.containers.models import ContainerStatus
+    state = manager.states.get(entry.container_name)
+    if state and state.status in (ContainerStatus.STOPPED, ContainerStatus.DEFINED, ContainerStatus.FAILED):
+        logger.info(f"On-demand start for model '{model_name}' (container {entry.container_name})")
+        await manager.start_container(entry.container_name)
+
+
+async def _resolve_url(request: Request, model_name: str) -> str:
+    registry = _get_registry(request)
+    manager = _get_manager(request)
+
+    await _ensure_model_running(request, model_name)
+
     url = registry.get_model_url(model_name, manager)
     if not url:
         available = [m["name"] for m in registry.list_models()]
@@ -100,7 +136,8 @@ def _extract_options(options: Optional[dict]) -> dict:
 
 @router.post("/chat")
 async def chat(body: OllamaChatRequest, request: Request):
-    target_url = _resolve_url(request, body.model)
+    target_url = await _resolve_url(request, body.model)
+    _touch_last_request(request, body.model)
 
     # Translate to OpenAI format
     openai_body = {
@@ -179,7 +216,8 @@ async def chat(body: OllamaChatRequest, request: Request):
 
 @router.post("/generate")
 async def generate(body: OllamaGenerateRequest, request: Request):
-    target_url = _resolve_url(request, body.model)
+    target_url = await _resolve_url(request, body.model)
+    _touch_last_request(request, body.model)
 
     openai_body = {
         "model": body.model,
@@ -242,7 +280,8 @@ async def generate(body: OllamaGenerateRequest, request: Request):
 
 @router.post("/embeddings")
 async def embeddings_ollama(body: OllamaEmbeddingRequest, request: Request):
-    target_url = _resolve_url(request, body.model)
+    target_url = await _resolve_url(request, body.model)
+    _touch_last_request(request, body.model)
 
     openai_body = {"model": body.model, "input": body.prompt}
 

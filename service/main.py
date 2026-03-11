@@ -1,7 +1,7 @@
 """
-llamacpp-router-agentified — Main FastAPI Application
+aify-llamacpp-router — Main FastAPI Application
 
-Ollama-like router that manages multiple llamacpp-agentified sub-containers.
+Ollama-like router that manages multiple aify-llamacpp sub-containers.
 Routes /v1/* (OpenAI) and /api/* (Ollama) requests to the correct model container.
 """
 
@@ -42,6 +42,7 @@ async def lifespan(app: FastAPI):
     from service.model_registry import ModelRegistry
     registry = ModelRegistry(config.config_dir)
     loaded_models = registry.load_models_from_env()
+    registry.sync_configs_to_data_volume()
     app.state.model_registry = registry
 
     # 2. Container manager — merge static service.json definitions with

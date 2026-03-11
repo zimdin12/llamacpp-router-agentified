@@ -1,10 +1,10 @@
-# Agentify Service - System Prompt Addition
+# aify-llamacpp-router - System Prompt Addition
 
 Add this block to your Open WebUI model's system prompt.
 
 ---
 
-## Available Service: Agentify Container
+## Available Service: aify-llamacpp-router
 
 You have access to a containerized service that manages on-demand sub-containers (LLMs, databases, etc.).
 

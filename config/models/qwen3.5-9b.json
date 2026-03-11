@@ -1,0 +1,11 @@
+{
+  "repo": "unsloth/Qwen3.5-9B-GGUF",
+  "filename": "Qwen3.5-9B-Q4_K_M.gguf",
+  "context_length": 65536,
+  "gpu_layers": -1,
+  "chat_format": "chatml",
+  "description": "Qwen3.5 9B Q4_K_M — balanced quality/speed, 6GB VRAM",
+  "type": "chat",
+  "embedding_dims": null,
+  "extra_args": ["--reasoning-budget", "0", "-fa", "on", "--no-mmap", "--cache-type-k", "q4_0", "--cache-type-v", "q4_0", "--jinja"]
+}

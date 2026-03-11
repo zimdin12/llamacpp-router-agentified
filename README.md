@@ -1,19 +1,19 @@
-# llamacpp-router-agentified
+# aify-llamacpp-router
 
-Ollama-like LLM router that manages multiple [llamacpp-agentified](https://github.com/zimdin12/llamacpp-agentified) sub-containers. Each model runs in its own isolated container, and the router provides a unified API with both OpenAI and Ollama compatibility.
+Ollama-like LLM router that manages multiple [aify-llamacpp](https://github.com/zimdin12/aify-llamacpp) sub-containers. Each model runs in its own isolated container, and the router provides a unified API with both OpenAI and Ollama compatibility.
 
-Built on [agentify-container](https://github.com/zimdin12/agentify-container) — uses the Python Docker SDK to spawn, health-check, and auto-shutdown model containers.
+Built on [aify-container](https://github.com/zimdin12/aify-container) — uses the Python Docker SDK to spawn, health-check, and auto-shutdown model containers.
 
 ## Quick Start
 
 ```bash
-# 1. Build llamacpp-agentified image first (the router spawns these)
-cd ../llamacpp-agentified
+# 1. Build aify-llamacpp image first (the router spawns these)
+cd ../aify-llamacpp
 docker compose build
-docker tag llamacpp-inference llamacpp-agentified:latest
+docker tag llamacpp-inference aify-llamacpp:latest
 
 # 2. Set up the router
-cd ../llamacpp-router-agentified
+cd ../aify-llamacpp-router
 cp .env.example .env
 cp config/service.example.json config/service.json
 
@@ -40,12 +40,12 @@ llamacpp-router (:11434)
     ┌────┴────────────────┐
     ▼                     ▼
 llm-qwen3-4b (:8080)   llm-qwen3-embedding-0.6b (:8080)
-(llamacpp-agentified)   (llamacpp-agentified)
+(aify-llamacpp)   (aify-llamacpp)
 ```
 
 1. On startup, the router reads `MODELS` env var (e.g., `qwen3-4b,mistral-7b`)
 2. For each model, it generates a container definition and registers it with the ContainerManager
-3. ContainerManager spawns llamacpp-agentified containers via Docker SDK
+3. ContainerManager spawns aify-llamacpp containers via Docker SDK
 4. Requests are routed to the correct container based on the `model` field
 
 ## API Endpoints
@@ -77,7 +77,7 @@ llm-qwen3-4b (:8080)   llm-qwen3-embedding-0.6b (:8080)
 | `/ready` | GET | Readiness with model list |
 | `/info` | GET | Full service discovery (models, endpoints, containers) |
 | `/docs` | GET | Swagger UI |
-| `/api/v1/containers` | GET | Container management API (from agentify-container) |
+| `/api/v1/containers` | GET | Container management API (from aify-container) |
 
 ## Usage Examples
 
@@ -134,7 +134,7 @@ curl http://localhost:11434/api/tags
 |---|---|---|
 | `MODELS` | *(empty)* | Comma-separated model names to serve |
 | `SERVICE_PORT` | `11434` | Router API port (Ollama default) |
-| `LLAMACPP_IMAGE` | `llamacpp-agentified:latest` | Docker image for model containers |
+| `LLAMACPP_IMAGE` | `aify-llamacpp:latest` | Docker image for model containers |
 | `LLAMACPP_DATA_VOLUME` | `llamacpp-shared-models` | Shared volume for model files |
 | `GPU_FRACTION_PER_MODEL` | `0.0` | GPU memory fraction per model |
 | `HF_TOKEN` | *(empty)* | HuggingFace token (passed to sub-containers) |
@@ -143,7 +143,7 @@ curl http://localhost:11434/api/tags
 
 ### Model Catalog
 
-Models are defined in `config/models/*.json`. The catalog is shared with llamacpp-agentified — same format:
+Models are defined in `config/models/*.json`. The catalog is shared with aify-llamacpp — same format:
 
 ```json
 {
@@ -167,7 +167,7 @@ Beyond dynamically-generated model containers, you can define static containers 
 ## Architecture
 
 ```
-llamacpp-router-agentified/
+aify-llamacpp-router/
 ├── config/
 │   ├── models/                  # Shared model catalog
 │   │   ├── qwen3-4b.json
@@ -177,7 +177,7 @@ llamacpp-router-agentified/
 │   ├── main.py                  # FastAPI app with model registry + container manager
 │   ├── model_registry.py        # MODELS env → container definitions
 │   ├── config.py                # Environment-based configuration
-│   ├── containers/              # Docker SDK container management (from agentify-container)
+│   ├── containers/              # Docker SDK container management (from aify-container)
 │   │   ├── manager.py
 │   │   ├── models.py
 │   │   ├── proxy.py
@@ -216,6 +216,6 @@ claude mcp add llamacpp-router --transport sse http://localhost:11434/mcp/claude
 
 ## Related Projects
 
-- **[llamacpp-agentified](https://github.com/zimdin12/llamacpp-agentified)** — The model container this router manages
-- **[openmemory-agentified](https://github.com/zimdin12/openmemory-agentified)** — Hybrid memory system that uses this as LLM backend
-- **[agentify-container](https://github.com/zimdin12/agentify-container)** — The base template
+- **[aify-llamacpp](https://github.com/zimdin12/aify-llamacpp)** — The model container this router manages
+- **[aify-openmemory](https://github.com/zimdin12/aify-openmemory)** — Hybrid memory system that uses this as LLM backend
+- **[aify-container](https://github.com/zimdin12/aify-container)** — The base template

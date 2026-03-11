@@ -1,0 +1,12 @@
+{
+  "repo": "unsloth/GLM-4.7-Flash-GGUF",
+  "filename": "GLM-4.7-Flash-Q4_K_M.gguf",
+  "context_length": 65536,
+  "gpu_layers": -1,
+  "chat_format": "chatml",
+  "description": "GLM-4.7-Flash 30B MoE (3B active) — fast, stable, 18GB VRAM",
+  "type": "chat",
+  "embedding_dims": null,
+  "extra_args": ["--reasoning-budget", "0", "--repeat-penalty", "1.0", "-fa", "on", "--no-mmap", "--cache-type-k", "q4_0", "--cache-type-v", "q4_0", "--jinja"],
+  "auto_start": false
+}

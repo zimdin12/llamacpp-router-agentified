@@ -1,5 +1,5 @@
 """
-Health and service info endpoints for llamacpp-router-agentified.
+Health and service info endpoints for aify-llamacpp-router.
 """
 
 from fastapi import APIRouter, Request

@@ -1,8 +1,9 @@
 # =============================================================================
-# llamacpp-router-agentified — Ollama-like LLM router
+# aify-llamacpp-router — Ollama-like LLM router
 # =============================================================================
-# Manages llamacpp-agentified sub-containers, one per model.
+# Manages aify-llamacpp sub-containers, one per model.
 # Set MODELS env var to select which models to serve.
+# All stacks share aify-network for cross-service communication.
 
 services:
   router:
@@ -22,14 +23,14 @@ services:
     environment:
       - SERVICE_PORT=11434
       - DATA_DIR=/data
-      - MODELS=${MODELS:-qwen3-4b}
+      - MODELS=${MODELS:-glm-4.7-flash,qwen3-embedding-0.6b}
     deploy:
       resources:
         limits:
           cpus: "${CPU_LIMIT:-2}"
           memory: ${MEMORY_LIMIT:-2g}
     networks:
-      - router-network
+      - aify-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/health"]
       interval: 30s
@@ -42,6 +43,6 @@ volumes:
     name: ${DATA_VOLUME_NAME:-llamacpp-router-data}
 
 networks:
-  router-network:
-    name: ${COMPOSE_PROJECT_NAME:-llamacpp-router}-network
-    driver: bridge
+  aify-network:
+    name: aify-network
+    external: true

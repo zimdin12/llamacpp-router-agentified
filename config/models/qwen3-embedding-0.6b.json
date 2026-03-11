@@ -1,10 +1,12 @@
 {
-  "repo": "lm-kit/qwen3-embedding-0.6b-gguf",
-  "filename": "Qwen3-Embedding-0.6B-F16.gguf",
-  "context_length": 8192,
+  "repo": "Qwen/Qwen3-Embedding-0.6B-GGUF",
+  "filename": "Qwen3-Embedding-0.6B-Q8_0.gguf",
+  "context_length": 512,
   "gpu_layers": -1,
   "chat_format": null,
-  "description": "Qwen3 Embedding 0.6B - text embedding model",
+  "description": "Qwen3 Embedding 0.6B Q8_0 — 1024-dim text embeddings, 610MB VRAM",
   "type": "embedding",
-  "embedding_dims": 1024
+  "embedding_dims": 1024,
+  "idle_timeout_seconds": 86400,
+  "auto_start": true
 }

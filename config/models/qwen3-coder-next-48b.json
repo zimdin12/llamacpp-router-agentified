@@ -1,0 +1,11 @@
+{
+  "repo": "lovedheart/Qwen3-Coder-Next-REAP-48B-A3B-GGUF",
+  "filename": "Qwen3-Coder-Next-REAP-48B-A3B-Q4_K_XL.gguf",
+  "context_length": 32768,
+  "gpu_layers": 30,
+  "chat_format": "chatml",
+  "description": "Qwen3-Coder-Next 48B-A3B (3B active) — coding specialist, 33GB model, partial GPU (30/48 layers)",
+  "type": "chat",
+  "embedding_dims": null,
+  "extra_args": ["--reasoning-budget", "0", "-fa", "on", "--no-mmap", "--cache-type-k", "q4_0", "--cache-type-v", "q4_0", "--jinja", "--threads", "8"]
+}

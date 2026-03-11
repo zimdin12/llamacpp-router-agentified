@@ -1,7 +1,7 @@
 {
   "name": "llamacpp-router",
   "version": "1.0.0",
-  "description": "Ollama-like router managing llamacpp-agentified model containers",
+  "description": "Ollama-like router managing aify-llamacpp model containers",
 
   "mcp_enabled": true,
   "mcp_path_prefix": "/mcp",
@@ -10,7 +10,7 @@
     "_comment": "Model containers are generated dynamically from MODELS env var. Static containers can be defined here.",
 
     "defaults": {
-      "image": "llamacpp-agentified:latest",
+      "image": "aify-llamacpp:latest",
       "internal_port": 8080,
       "idle_timeout_seconds": 600,
       "startup_timeout_seconds": 300,

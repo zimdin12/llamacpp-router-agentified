@@ -1,0 +1,11 @@
+{
+  "repo": "unsloth/Qwen3.5-35B-A3B-GGUF",
+  "filename": "Qwen3.5-35B-A3B-Q4_K_M.gguf",
+  "context_length": 65536,
+  "gpu_layers": -1,
+  "chat_format": "chatml",
+  "description": "Qwen3.5-35B-A3B MoE (3B active) — best quality, 21GB VRAM, needs --reasoning-budget 0",
+  "type": "chat",
+  "embedding_dims": null,
+  "extra_args": ["--reasoning-budget", "0", "-fa", "on", "--no-mmap", "--cache-type-k", "q4_0", "--cache-type-v", "q4_0", "--jinja"]
+}

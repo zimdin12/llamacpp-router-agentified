@@ -1,5 +1,5 @@
 """
-llamacpp-router-agentified — Model Registry
+aify-llamacpp-router — Model Registry
 
 Parses MODELS env var, reads model catalog configs, and generates
 ContainerDefinition entries for each model. Manages the mapping
@@ -44,7 +44,7 @@ class ModelEntry:
 
 class ModelRegistry:
     """
-    Registry of models. Each model maps to a llamacpp-agentified sub-container.
+    Registry of models. Each model maps to an aify-llamacpp sub-container.
 
     Reads MODELS env var (comma-separated model names) and generates
     container definitions for the ContainerManager.
@@ -54,7 +54,7 @@ class ModelRegistry:
         self.config_dir = config_dir
         self.catalog_dir = Path(config_dir) / "models"
         self.models: Dict[str, ModelEntry] = {}
-        self._llamacpp_image = os.getenv("LLAMACPP_IMAGE", "llamacpp-agentified:latest")
+        self._llamacpp_image = os.getenv("LLAMACPP_IMAGE", "aify-llamacpp:latest")
         self._llamacpp_data_volume = os.getenv("LLAMACPP_DATA_VOLUME", "llamacpp-shared-models")
         self._network_name = os.getenv("COMPOSE_PROJECT_NAME", "llamacpp-router") + "-network"
         self._gpu_per_model = float(os.getenv("GPU_FRACTION_PER_MODEL", "0.0"))
@@ -78,6 +78,51 @@ class ModelRegistry:
 
         logger.info(f"Registered {len(loaded)} models: {loaded}")
         return loaded
+
+    def sync_configs_to_data_volume(self):
+        """Copy model catalog JSONs into the shared data volume so sub-containers can read them."""
+        import docker
+        import io
+        import tarfile
+
+        client = docker.from_env()
+
+        # Find a container that has the data volume mounted (or inspect the volume directly)
+        # Simpler: write configs into a temp container with the volume
+        volume_name = self._llamacpp_data_volume
+        models_dir = self.catalog_dir
+
+        if not models_dir.exists():
+            logger.warning(f"No catalog dir at {models_dir}")
+            return
+
+        config_files = list(models_dir.glob("*.json"))
+        if not config_files:
+            return
+
+        # Create a tar archive with models/ directory containing all JSON configs
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            for f in config_files:
+                tar.add(str(f), arcname=f"models/{f.name}")
+        buf.seek(0)
+
+        # Use a temporary container to write configs and fix permissions for non-root sub-containers
+        try:
+            container = client.containers.run(
+                "busybox:latest",
+                command="sleep 5",
+                volumes={volume_name: {"bind": "/data", "mode": "rw"}},
+                remove=False,
+                detach=True,
+            )
+            container.put_archive("/data", buf)
+            container.exec_run("chmod -R 777 /data/models")
+            container.stop()
+            container.remove(force=True)
+            logger.info(f"Synced {len(config_files)} model configs to volume '{volume_name}'")
+        except Exception as e:
+            logger.error(f"Failed to sync configs to data volume: {e}")
 
     def _register_model(self, name: str):
         """Register a model from catalog config."""
@@ -103,7 +148,7 @@ class ModelRegistry:
     def generate_container_definitions(self) -> dict[str, ContainerDefinition]:
         """
         Generate ContainerDefinition objects for ContainerManager.
-        Each model becomes a llamacpp-agentified sub-container.
+        Each model becomes an aify-llamacpp sub-container.
         """
         definitions = {}
 
@@ -111,10 +156,11 @@ class ModelRegistry:
             container_name = entry.container_name
             catalog = entry.catalog
 
-            # Environment for the llamacpp-agentified container
+            # Environment for the aify-llamacpp container
             env = {
                 "MODEL_NAME": name,
                 "MODEL_DIR": "/data/models",
+                "CONFIG_DIR": "/data",
                 "SERVICE_PORT": "8080",
                 "GPU_LAYERS": str(catalog.get("gpu_layers", -1)),
             }
@@ -140,9 +186,9 @@ class ModelRegistry:
                     retries=3,
                 ),
                 resources=ResourceConfig(cpu_limit="4", memory_limit="8g"),
-                idle_timeout_seconds=600,
-                startup_timeout_seconds=600,  # model download can take a while
-                auto_start=True,
+                idle_timeout_seconds=catalog.get("idle_timeout_seconds", 600),
+                startup_timeout_seconds=3600,  # model download can take 30+ min for large models
+                auto_start=catalog.get("auto_start", False),
                 group="inference",
             )
 

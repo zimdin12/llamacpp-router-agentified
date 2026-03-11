@@ -5,6 +5,7 @@ OpenAI-compatible proxy — routes /v1/* requests to the correct llamacpp sub-co
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -28,8 +29,26 @@ def _get_manager(request: Request):
     return getattr(request.app.state, "container_manager", None)
 
 
+async def _ensure_model_running(request: Request, model_name: str):
+    """Auto-start a model container if it's stopped (on-demand startup)."""
+    registry = _get_registry(request)
+    manager = _get_manager(request)
+    if not manager:
+        return
+
+    entry = registry.get_model(model_name)
+    if not entry:
+        return
+
+    from service.containers.models import ContainerStatus
+    state = manager.states.get(entry.container_name)
+    if state and state.status in (ContainerStatus.STOPPED, ContainerStatus.DEFINED, ContainerStatus.FAILED):
+        logger.info(f"On-demand start for model '{model_name}' (container {entry.container_name})")
+        await manager.start_container(entry.container_name)
+
+
 async def _resolve_model_url(request: Request, model_name: Optional[str] = None) -> str:
-    """Resolve model name to sub-container URL."""
+    """Resolve model name to sub-container URL, auto-starting if needed."""
     registry = _get_registry(request)
     manager = _get_manager(request)
 
@@ -39,6 +58,9 @@ async def _resolve_model_url(request: Request, model_name: Optional[str] = None)
             raise HTTPException(503, "No models registered")
         model_name = models[0]["name"]
 
+    # Auto-start stopped containers on demand
+    await _ensure_model_running(request, model_name)
+
     url = registry.get_model_url(model_name, manager)
     if not url:
         available = [m["name"] for m in registry.list_models()]
@@ -46,9 +68,24 @@ async def _resolve_model_url(request: Request, model_name: Optional[str] = None)
     return url
 
 
+def _touch_last_request(request: Request, model_name: Optional[str]):
+    """Update last_request_at so the idle reaper doesn't kill active containers."""
+    registry = getattr(request.app.state, "model_registry", None)
+    manager = _get_manager(request)
+    if not registry or not manager or not model_name:
+        return
+    entry = registry.get_model(model_name)
+    if not entry:
+        return
+    state = manager.states.get(entry.container_name)
+    if state:
+        state.last_request_at = datetime.now(timezone.utc)
+
+
 async def _proxy_to_model(request: Request, model_name: Optional[str], path: str):
     """Proxy request to the correct model sub-container."""
     target_url = await _resolve_model_url(request, model_name)
+    _touch_last_request(request, model_name)
     url = f"{target_url}{path}"
 
     body = await request.body()
@@ -155,7 +192,7 @@ async def list_models(request: Request):
             "id": m["name"],
             "object": "model",
             "created": int(time.time()),
-            "owned_by": "llamacpp-router-agentified",
+            "owned_by": "aify-llamacpp-router",
             "permission": [],
             "root": m["name"],
             "parent": None,

@@ -41,8 +41,7 @@ class ContainerManager:
 
         config = get_config()
         self.project_name = config.custom.get(
-            "compose_project_name",
-            config.custom.get("compose_project_name", "agentify"),
+            "compose_project_name", "aify"
         )
         self.network_name = config.custom.get(
             "network_name", f"{self.project_name}-network"
@@ -70,10 +69,10 @@ class ContainerManager:
             return
         try:
             containers = self.docker.containers.list(
-                filters={"label": "agentify.managed=true"}, all=True,
+                filters={"label": "aify.managed=true"}, all=True,
             )
             for container in containers:
-                name = container.labels.get("agentify.name", "")
+                name = container.labels.get("aify.name", "")
                 if name in self.states:
                     state = self.states[name]
                     if container.status == "running":
@@ -195,9 +194,14 @@ class ContainerManager:
                         )
 
                     labels = {
-                        "agentify.managed": "true",
-                        "agentify.name": name,
-                        "agentify.group": defn.group,
+                        "aify.managed": "true",
+                        "aify.name": name,
+                        "aify.group": defn.group,
+                        # Docker Desktop compose grouping
+                        "com.docker.compose.project": self.project_name,
+                        "com.docker.compose.service": name,
+                        "com.docker.compose.container-number": "1",
+                        "com.docker.compose.oneoff": "False",
                         **defn.labels,
                     }
 
@@ -375,12 +379,19 @@ class ContainerManager:
         self._reaper_task = asyncio.create_task(self._idle_reaper_loop())
         self._health_task = asyncio.create_task(self._health_monitor_loop())
 
-        for name, defn in self.definitions.items():
-            if defn.auto_start:
-                try:
-                    await self.start_container(name)
-                except Exception as e:
-                    logger.error(f"Auto-start failed for {name}: {e}")
+        # Start all auto_start containers in parallel as background tasks
+        # (don't block lifespan — model downloads can take minutes)
+        async def _auto_start(name):
+            try:
+                await self.start_container(name)
+            except Exception as e:
+                logger.error(f"Auto-start failed for {name}: {e}")
+
+        self._auto_start_tasks = [
+            asyncio.create_task(_auto_start(name))
+            for name, defn in self.definitions.items()
+            if defn.auto_start
+        ]
 
     async def stop_background_tasks(self):
         for task in [self._reaper_task, self._health_task]:
